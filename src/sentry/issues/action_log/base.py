@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from django.db import router, transaction
 from rest_framework.request import Request
@@ -21,13 +22,15 @@ from sentry.issues.action_log.types import (
     GroupActionLogPayload,
 )
 from sentry.middleware import is_frontend_request
-from sentry.models.project import Project
 from sentry.users.models.user import User
 from sentry.users.services.user import RpcUser
 from sentry.utils import metrics
 from sentry.utils.http import is_mcp_request
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from sentry.models.project import Project
 
 # Group Action Log — tracks who did what to an issue and how.
 #

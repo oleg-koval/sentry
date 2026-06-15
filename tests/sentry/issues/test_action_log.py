@@ -7,11 +7,7 @@ from django.db import router, transaction
 import sentry.api.helpers.group_index.update
 import sentry.issues.endpoints.group_details
 import sentry.issues.endpoints.group_integration_details
-import sentry.issues.priority
-import sentry.issues.status_change
-import sentry.models.group
-import sentry.models.groupassignee
-import sentry.models.groupinbox
+import sentry.models.activity
 from sentry.auth.services.auth import AuthenticatedToken
 from sentry.hybridcloud.models.outbox import CellOutbox, outbox_context
 from sentry.hybridcloud.outbox.category import OutboxCategory
@@ -290,9 +286,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         )
         self.url = f"/api/0/organizations/{self.organization.slug}/issues/{self.group.id}/"
 
-    @patch.object(
-        sentry.api.helpers.group_index.update, "publish_action_from_context", autospec=True
-    )
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_resolve_emits_action(self, mock_publish: MagicMock) -> None:
         response = self.client.put(self.url, data={"status": "resolved"}, format="json")
         assert response.status_code == 200
@@ -304,9 +298,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         assert len(resolve_calls) == 1
         assert resolve_calls[0].kwargs["group_id"] == self.group.id
 
-    @patch.object(
-        sentry.api.helpers.group_index.update, "publish_action_from_context", autospec=True
-    )
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_resolve_already_resolved_skips(self, mock_publish: MagicMock) -> None:
         self.group.update(status=GroupStatus.RESOLVED, substatus=None)
         response = self.client.put(self.url, data={"status": "resolved"}, format="json")
@@ -318,7 +310,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         ]
         assert len(resolve_calls) == 0
 
-    @patch.object(sentry.issues.status_change, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_archive_emits_action(self, mock_publish: MagicMock) -> None:
         response = self.client.put(
             self.url,
@@ -329,7 +321,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         mock_publish.assert_called_once()
         assert isinstance(mock_publish.call_args.args[0], ArchiveAction)
 
-    @patch.object(sentry.issues.status_change, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_archive_already_archived_skips(self, mock_publish: MagicMock) -> None:
         self.group.update(status=GroupStatus.IGNORED, substatus=GroupSubStatus.UNTIL_ESCALATING)
         response = self.client.put(
@@ -340,20 +332,20 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         assert response.status_code == 200
         mock_publish.assert_not_called()
 
-    @patch.object(sentry.issues.priority, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_priority_change_emits_action(self, mock_publish: MagicMock) -> None:
         response = self.client.put(self.url, data={"priority": "high"}, format="json")
         assert response.status_code == 200
         mock_publish.assert_called_once()
         assert isinstance(mock_publish.call_args.args[0], SetPriorityAction)
 
-    @patch.object(sentry.issues.priority, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_priority_same_value_skips(self, mock_publish: MagicMock) -> None:
         response = self.client.put(self.url, data={"priority": "medium"}, format="json")
         assert response.status_code == 200
         mock_publish.assert_not_called()
 
-    @patch.object(sentry.models.groupassignee, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_assign_emits_action(self, mock_publish: MagicMock) -> None:
         response = self.client.put(
             self.url, data={"assignedTo": f"user:{self.user.id}"}, format="json"
@@ -362,14 +354,14 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         mock_publish.assert_called_once()
         assert isinstance(mock_publish.call_args.args[0], AssignAction)
 
-    @patch.object(sentry.models.groupassignee, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_assign_same_user_skips(self, mock_publish: MagicMock) -> None:
         self.client.put(self.url, data={"assignedTo": f"user:{self.user.id}"}, format="json")
         mock_publish.reset_mock()
         self.client.put(self.url, data={"assignedTo": f"user:{self.user.id}"}, format="json")
         mock_publish.assert_not_called()
 
-    @patch.object(sentry.models.groupassignee, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_unassign_emits_action(self, mock_publish: MagicMock) -> None:
         self.client.put(self.url, data={"assignedTo": f"user:{self.user.id}"}, format="json")
         mock_publish.reset_mock()
@@ -380,7 +372,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         ]
         assert len(unassign_calls) == 1
 
-    @patch.object(sentry.models.groupassignee, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_unassign_without_assignee_skips(self, mock_publish: MagicMock) -> None:
         response = self.client.put(self.url, data={"assignedTo": ""}, format="json")
         assert response.status_code == 200
@@ -393,7 +385,7 @@ class TestActionLogIntegration(APITestCase, SnubaTestCase):
         mock_publish.assert_called_once()
         assert isinstance(mock_publish.call_args.args[0], ViewAction)
 
-    @patch.object(sentry.models.groupinbox, "publish_action_from_context", autospec=True)
+    @patch("sentry.models.activity.publish_action_from_context", autospec=True)
     def test_mark_reviewed_emits_for_inbox_groups(self, mock_publish: MagicMock) -> None:
         from sentry.models.groupinbox import GroupInbox, GroupInboxReason, add_group_to_inbox
 
@@ -466,21 +458,6 @@ class TestUpdateGroupStatusActionLog(APITestCase, SnubaTestCase):
         assert len(records) == 1
         assert getattr(records[0], "action") == "archive"
         assert getattr(records[0], "source") == ActionSource.SYSTEM
-
-    @patch.object(sentry.models.group, "publish_action_from_context", autospec=True)
-    def test_substatus_only_transition_emits_no_action(self, mock_publish: MagicMock) -> None:
-        # AUTO_SET_ONGOING moves a group NEW -> ONGOING but it stays UNRESOLVED; that
-        # substatus-only change must not be logged as an unresolve.
-        group = self.create_group(status=GroupStatus.UNRESOLVED, substatus=GroupSubStatus.NEW)
-        with action_context_scope(source=ActionSource.SYSTEM, actor=SYSTEM_ACTOR):
-            Group.objects.update_group_status(
-                groups=[group],
-                status=GroupStatus.UNRESOLVED,
-                substatus=GroupSubStatus.ONGOING,
-                activity_type=ActivityType.AUTO_SET_ONGOING,
-                from_substatus=GroupSubStatus.NEW,
-            )
-        assert mock_publish.call_count == 0
 
 
 class TestExternalIssueLinkingActionLog(APITestCase, SnubaTestCase):

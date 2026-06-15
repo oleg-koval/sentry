@@ -1,5 +1,5 @@
 import logging
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from pydantic.error_wrappers import ValidationError
 
@@ -42,9 +42,12 @@ from sentry.issues.action_log.types import (
     UnmergeSourceAction,
     UnresolveAction,
 )
-from sentry.models.activity import Activity
 from sentry.types.activity import ActivityType
 from sentry.utils.env import in_test_environment
+
+if TYPE_CHECKING:
+    from sentry.models.activity import Activity
+
 
 ACTIVITY_TYPES_WITH_NO_ACTION: frozenset[int] = frozenset(
     (
@@ -119,7 +122,7 @@ ACTIVITY_TYPE_TO_ARG_TRANSLATIONS: Mapping[int, Mapping[str, str]] = {
 logger = logging.getLogger(__name__)
 
 
-def activity_to_action(activity: Activity) -> GroupAction | None:
+def activity_to_action(activity: "Activity") -> GroupAction | None:
     """
     Translates an Activity to a GroupAction. None is returned in the error case.
     Does not publish the GroupAction to a GroupActionLogEntry.
