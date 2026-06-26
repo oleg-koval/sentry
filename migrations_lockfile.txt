@@ -29,7 +29,7 @@ releases: 0004_cleanup_failed_safe_deletes
 
 replays: 0007_organizationmember_replay_access
 
-seer: 0021_add_agent_write_grant
+seer: 0024_add_agent_write_grant
 
 sentry: 1124_weeklyreportprojectexclusion
 
