@@ -19,6 +19,7 @@ from sentry.integrations.types import IntegrationProviderSlug
 from sentry.issues.grouptype import GroupCategory
 from sentry.issues.issue_occurrence import IssueOccurrence
 from sentry.killswitches import killswitch_matches_context
+from sentry.options.rollout import in_random_rollout
 from sentry.replays.lib.event_linking import transform_event_for_linking_payload
 from sentry.replays.lib.kafka import publish_replay_event
 from sentry.signals import event_processed, issue_unignored
@@ -1580,6 +1581,58 @@ def process_siem_security_logging(job: PostProcessJob) -> None:
     _siem_security_log_hook(job)
 
 
+def process_gpu_crash_dump_async(job: PostProcessJob) -> None:
+    """Schedule isolated GPU crash dump symbolication for native events that
+    carry a ``.nv-gpudmp`` attachment.
+
+    This only *schedules* the work; the actual teapot call + GPU issue
+    production runs in the isolated ``gpu.crash_dump`` task (see
+    ``sentry/tasks/gpu_crash.py``). Scheduling is best-effort and fully wrapped:
+    it can never affect post-processing of the primary (CPU) issue. The
+    ``run_post_process_job`` loop also guards each step, so this is defense in
+    depth.
+    """
+    if job["is_reprocessed"]:
+        return
+
+    from sentry.lang.native.utils import has_gpu_crash_dump_attachment, is_native_platform
+
+    event = job["event"]
+
+    # Cheap, in-memory check first: has_gpu_crash_dump_attachment reads the
+    # event's `_attachments` list (no cache/DB hit), so events without a GPU
+    # dump — the overwhelming majority — bail out essentially for free.
+    if not is_native_platform(event.platform) or not has_gpu_crash_dump_attachment(event.data):
+        return
+
+    organization = event.project.organization
+    if not features.has("organizations:gpu-crash-symbolication", organization):
+        return
+    # Global kill switch + load/rollout dial, both honored before we enqueue.
+    if not options.get("teapot.enabled"):
+        return
+    if not in_random_rollout("teapot.crash-dump.sample-rate"):
+        metrics.incr("tasks.gpu_crash.sampled_out")
+        return
+
+    try:
+        from sentry.tasks.gpu_crash import symbolicate_gpu_crash
+
+        symbolicate_gpu_crash.apply_async(
+            kwargs={
+                "project_id": event.project_id,
+                "cpu_event_id": event.event_id,
+                "group_id": event.group_id,
+            },
+            headers={"sentry-propagate-traces": False},
+        )
+        metrics.incr("tasks.gpu_crash.scheduled")
+    except Exception:
+        # Enqueue must never break the primary issue's post-processing.
+        metrics.incr("tasks.gpu_crash.schedule_error")
+        logger.exception("Failed to schedule GPU crash dump task")
+
+
 GROUP_CATEGORY_POST_PROCESS_PIPELINE: dict[
     GroupCategory, list[Callable[[PostProcessJob], None]]
 ] = {
@@ -1606,6 +1659,7 @@ GROUP_CATEGORY_POST_PROCESS_PIPELINE: dict[
         link_event_to_user_report,
         detect_base_urls_for_uptime,
         check_if_flags_sent,
+        process_gpu_crash_dump_async,
         process_processing_errors_eap,
         process_processing_issue_detection,
         process_siem_security_logging,

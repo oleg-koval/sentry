@@ -483,9 +483,6 @@ INSTALLED_APPS: tuple[str, ...] = (
     "sentry.sentry_metrics",
     "sentry.sentry_metrics.indexer.postgres.apps.Config",
     "sentry.snuba",
-    "sentry.lang.java.apps.Config",
-    "sentry.lang.javascript.apps.Config",
-    "sentry.lang.dart.apps.Config",
     "sentry.lang.native.apps.Config",
     "sentry.plugins.sentry_interface_types.apps.Config",
     "sentry.plugins.sentry_urls.apps.Config",
@@ -983,6 +980,7 @@ TASKWORKER_IMPORTS: tuple[str, ...] = (
     "sentry.tasks.digests",
     "sentry.tasks.email",
     "sentry.tasks.files",
+    "sentry.tasks.gpu_crash",
     "sentry.tasks.groupowner",
     "sentry.tasks.llm_issue_detection.detection",
     "sentry.tasks.llm_issue_detection",
@@ -2840,10 +2838,6 @@ SYMBOLICATOR_POOL_URLS: dict[str, str] = {
     # "jvm": "...",
 }
 
-# URL of the teapot GPU crash dump symbolication service.
-# Falls back to the `teapot.options` option when unset.
-TEAPOT_URL: str | None = None
-
 SENTRY_REQUEST_METRIC_ALLOWED_PATHS = (
     "sentry.web.api",
     "sentry.web.frontend",
@@ -3002,6 +2996,9 @@ SEER_GHE_ENCRYPT_KEY: str | None = os.getenv("SEER_GHE_ENCRYPT_KEY")
 SENTRY_VROOM = os.getenv("VROOM", "http://127.0.0.1:8085")
 
 SENTRY_TEMPEST_URL = os.getenv("TEMPEST", "http://127.0.0.1:9130")
+
+# URL of the teapot GPU crash dump symbolication service (sibling to Symbolicator).
+SENTRY_TEAPOT_URL = os.getenv("TEAPOT", "http://127.0.0.1:8125")
 
 SENTRY_REPLAYS_SERVICE_URL = "http://localhost:8090"
 

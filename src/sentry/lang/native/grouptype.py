@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sentry.issues.grouptype import GroupCategory, GroupType, NotificationConfig
+from sentry.ratelimits.sliding_windows import Quota
 from sentry.types.group import PriorityLevel
 
 
@@ -40,6 +41,13 @@ class GpuCrashGroupType(GroupType):
     # auto-generated `organizations:issue-gpu-crash-ingest` feature.
     released = False
     default_priority = PriorityLevel.HIGH
+    # The base GroupType default is Quota(3600, 60, 5) — 5 new groups per
+    # project per hour. That spam guard is sized for derived/heuristic issue
+    # kinds and is far too tight for a crash-heavy native title, where distinct
+    # GPU faults (per fault_category + shader_hash) legitimately exceed it.
+    # Match the error group type's headroom so we don't silently drop real GPU
+    # issues; this throttles group *creation* only and has no billing effect.
+    creation_quota = Quota(3600, 60, 1000)  # 1000 per hour, sliding window of 60s
     # A GPU crash is never self-healing — disable auto-resolve and
     # escalation detection until the product story catches up.
     enable_auto_resolve = False

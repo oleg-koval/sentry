@@ -250,7 +250,7 @@ def find_all_shader_debug_attachments(data: Any) -> list[tuple[str, CachedAttach
         if m is None:
             logger.info(
                 "gpu.shader_debug.unparseable_name",
-                extra={"filename": name, "type": ty},
+                extra={"attachment_name": name, "type": ty},
             )
             continue
         uid = m.group("uid").lower()
@@ -258,6 +258,59 @@ def find_all_shader_debug_attachments(data: Any) -> list[tuple[str, CachedAttach
             continue
         seen_uids.add(uid)
         out.append((uid, attachment))
+    return out
+
+
+def find_gpu_crash_dump_eventattachment(project_id: int, event_id: str) -> Any:
+    """Durable, post-save lookup of the GPU crash dump for an event.
+
+    The async GPU task runs *after* the event and its attachments are saved, so
+    it reads from `EventAttachment` — which persists regardless of objectstore
+    rollout — rather than the ephemeral `CachedAttachment` processing cache.
+    Matching mirrors `find_gpu_crash_dump_attachment`: canonical
+    `event.nv_gpudmp` type first, then any attachment named `*.nv-gpudmp`.
+    """
+    from sentry.lang.native.processing import GPU_CRASH_DUMP_ATTACHMENT_TYPE
+    from sentry.models.eventattachment import EventAttachment
+
+    attachments = list(EventAttachment.objects.filter(project_id=project_id, event_id=event_id))
+    for a in attachments:
+        if a.type == GPU_CRASH_DUMP_ATTACHMENT_TYPE:
+            return a
+    for a in attachments:
+        if (a.name or "").endswith(".nv-gpudmp"):
+            return a
+    return None
+
+
+def find_all_shader_debug_eventattachments(project_id: int, event_id: str) -> list[tuple[str, Any]]:
+    """Durable, post-save lookup of every shader-debug-info attachment.
+
+    Post-save counterpart of `find_all_shader_debug_attachments`, returning
+    `(uid, EventAttachment)` pairs keyed off the same filename / type rules.
+    """
+    from sentry.models.eventattachment import EventAttachment
+
+    out: list[tuple[str, Any]] = []
+    seen_uids: set[str] = set()
+    for a in EventAttachment.objects.filter(project_id=project_id, event_id=event_id):
+        ty = a.type or ""
+        name = a.name or ""
+        if ty != SHADER_DEBUG_INFO_ATTACHMENT_TYPE and not (
+            ty == "event.attachment" and name.endswith(".nvdbg")
+        ):
+            continue
+        m = _NVDBG_FILENAME_RE.search(name)
+        if m is None:
+            logger.info(
+                "gpu.shader_debug.unparseable_name", extra={"attachment_name": name, "type": ty}
+            )
+            continue
+        uid = m.group("uid").lower()
+        if uid in seen_uids:
+            continue
+        seen_uids.add(uid)
+        out.append((uid, a))
     return out
 
 

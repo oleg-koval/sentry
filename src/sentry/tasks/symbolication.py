@@ -6,15 +6,10 @@ from typing import Any
 import sentry_sdk
 from django.conf import settings
 
-from sentry import features
 from sentry.killswitches import killswitch_matches_context
 from sentry.lang.javascript.processing import process_js_stacktraces
-from sentry.lang.native.processing import (
-    get_native_symbolication_function,
-    process_gpu_crash_dump,
-)
+from sentry.lang.native.processing import get_native_symbolication_function
 from sentry.lang.native.symbolicator import Symbolicator, SymbolicatorPlatform, SymbolicatorTaskKind
-from sentry.lang.native.utils import has_gpu_crash_dump_attachment
 from sentry.models.organization import Organization
 from sentry.models.project import Project
 from sentry.services.eventstore import processing
@@ -222,32 +217,11 @@ def _do_symbolicate_event(
             data.setdefault("_metrics", {})["flag.processing.fatal"] = True
             has_changed = True
 
-    # Additive GPU crash dump enrichment via teapot. Runs alongside the
-    # native symbolication pass so minidump + .nv-gpudmp events land both the
-    # CPU stack (above) and the GPU context (here) on the same event.
-    # Failures here are always swallowed — never regress the primary event.
-    if (
-        task_kind.platform == SymbolicatorPlatform.native
-        and has_gpu_crash_dump_attachment(data)
-        and features.has("organizations:gpu-crash-symbolication", project.organization)
-    ):
-        with (
-            metrics.timer("tasks.store.symbolicate_event.teapot"),
-            sentry_sdk.start_span(op="tasks.store.symbolicate_event.teapot"),
-        ):
-            try:
-                enriched = process_gpu_crash_dump(data, project, event_id)
-                if enriched is not None and enriched is not data:
-                    data = enriched
-                has_changed = True
-            except Exception:
-                metrics.incr(
-                    "tasks.store.symbolicate_event.teapot.error",
-                    tags={"reason": "unexpected"},
-                )
-                error_logger.exception("tasks.store.symbolicate_event.teapot")
-                # Deliberately do NOT set flag.processing.fatal — teapot
-                # failures must not degrade the CPU issue outcome.
+    # GPU crash dump enrichment (teapot) is intentionally NOT done here. It runs
+    # in an isolated post-save task (`sentry.tasks.gpu_crash`), scheduled from
+    # `post_process_group`, so a slow/unavailable teapot can never add latency
+    # to — or otherwise regress — native CPU symbolication. See
+    # `process_gpu_crash_dump_async` in `sentry/tasks/post_process.py`.
 
     # We cannot persist canonical types in the cache, so we need to
     # downgrade this.

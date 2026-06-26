@@ -362,6 +362,27 @@ register(
     default={"url": "http://127.0.0.1:8125"},
     flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_AUTOMATOR_MODIFIABLE,
 )
+# Fraction of eligible GPU crash events to actually forward to teapot. A load /
+# rollout dial *on top of* the feature flag: drop below 1.0 to throttle teapot
+# and the gpu.crash_dump queue without flipping the flag. 0.0 = process nothing.
+register(
+    "teapot.crash-dump.sample-rate",
+    default=1.0,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+# Per-request HTTP timeout (seconds) for a single call to teapot.
+register(
+    "teapot.timeout-seconds",
+    default=25,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+# Max attempts per teapot call (retries only on transient 5xx). Kept low so a
+# slow teapot can never pile up work on the GPU task worker.
+register(
+    "teapot.max-attempts",
+    default=2,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
 
 # Killswitch for symbolication sources, based on a list of source IDs. Meant to be used in extreme
 # situations where it is preferable to break symbolication in a few places as opposed to letting

@@ -40,12 +40,28 @@ from sentry.objectstore import get_attachments_session, get_symbolicator_url
 
 logger = logging.getLogger(__name__)
 
-# Total request budget: teapot's own decode budget is 30s; we add 5s of slack.
-DEFAULT_TIMEOUT = 35
+# Fallbacks if the options aren't available for some reason. The live values
+# come from `teapot.timeout-seconds` / `teapot.max-attempts` so ops can tune
+# them at runtime without a deploy (see `_timeout` / `_max_attempts`).
+DEFAULT_TIMEOUT = 25
+DEFAULT_MAX_ATTEMPTS = 2
 
 # Retry only on transient / bounded failures. Everything else surfaces.
 RETRYABLE_STATUS = (502, 503, 504)
-MAX_ATTEMPTS = 3
+
+
+def _timeout() -> int:
+    try:
+        return int(options.get("teapot.timeout-seconds")) or DEFAULT_TIMEOUT
+    except Exception:
+        return DEFAULT_TIMEOUT
+
+
+def _max_attempts() -> int:
+    try:
+        return max(1, int(options.get("teapot.max-attempts")))
+    except Exception:
+        return DEFAULT_MAX_ATTEMPTS
 
 
 class TeapotUnavailable(Exception):
@@ -53,7 +69,10 @@ class TeapotUnavailable(Exception):
 
 
 def _resolve_url() -> str | None:
-    base = getattr(settings, "TEAPOT_URL", None)
+    # SENTRY_TEAPOT_URL (sourced from the TEAPOT env var) is the endpoint,
+    # mirroring SENTRY_TEMPEST_URL / SENTRY_VROOM. The automator-modifiable
+    # `teapot.options` url is a fallback for installs that don't set the env var.
+    base = getattr(settings, "SENTRY_TEAPOT_URL", None)
     if base:
         return base.rstrip("/")
     configured = options.get("teapot.options") or {}
@@ -99,7 +118,7 @@ class TeapotClient:
     def __init__(self, project: Any, event_id: str) -> None:
         base_url = _resolve_url()
         if not base_url:
-            raise TeapotUnavailable("TEAPOT_URL not configured")
+            raise TeapotUnavailable("SENTRY_TEAPOT_URL not configured")
         self.base_url = base_url
         self.project = project
         self.event_id = event_id
@@ -114,6 +133,11 @@ class TeapotClient:
         headers = {
             "X-Teapot-Version": "1",
             "X-Request-Id": self.event_id,
+            # event_id is a natural idempotency key: one decode per event.
+            # Teapot replays a cached 200 (never a 5xx) for a repeated key,
+            # so a retried symbolication task skips the re-decode + the
+            # objectstore round-trip entirely. See teapot's IdempotencyCache.
+            "Idempotency-Key": self.event_id,
         }
 
         if _all_stored(dump, shader_debug_info):
@@ -212,14 +236,15 @@ class TeapotClient:
         files: Any = None,
     ) -> dict[str, Any]:
         last_exc: Exception | None = None
-        for attempt in range(MAX_ATTEMPTS):
+        timeout = _timeout()
+        for attempt in range(_max_attempts()):
             try:
                 resp = requests.post(
                     url,
                     data=data,
                     files=files,
                     headers=headers,
-                    timeout=DEFAULT_TIMEOUT,
+                    timeout=timeout,
                 )
             except requests.RequestException as e:
                 last_exc = e

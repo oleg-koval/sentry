@@ -251,6 +251,29 @@ def _get_or_create_gpu_detector_id(project: Any) -> int | None:
 # ─────────────────────── occurrence + GPU event emission ──────────────────
 
 
+def emit_gpu_crash_occurrence(
+    project: Any,
+    cpu_event_id: str,
+    cpu_event_data: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> bool:
+    """Produce the secondary GPU ``IssueOccurrence`` from a teapot response.
+
+    Public entry point for the async GPU task (``sentry.tasks.gpu_crash``).
+    ``cpu_event_data`` is the saved CPU event's data — used only to source the
+    trace id, tags, release, environment, and sdk for co-location; it is never
+    mutated (the CPU event is already persisted). Returns True iff an occurrence
+    was produced. ``failed``/unknown statuses are a no-op: teapot couldn't
+    decode, so there's no useful fingerprint. May raise — the task wraps this.
+    """
+    status = response.get("status")
+    if status not in ("completed", "partial"):
+        metrics.incr("process.gpu.occurrence.skipped", tags={"status": status or "unknown"})
+        return False
+    _produce_gpu_occurrence(cpu_event_data, project, cpu_event_id, response)
+    return True
+
+
 def _build_evidence_display(
     response: Mapping[str, Any],
     fault: Mapping[str, Any],
@@ -362,9 +385,13 @@ def _produce_gpu_occurrence(
 
     evidence_display = _build_evidence_display(response, fault, gpu_state, primary_shader)
 
-    private = data.get("_gpu_crash_private") or {}
-    frames = private.get("frames") or []
-    markers = private.get("markers") or []
+    # Frames/markers come straight from teapot's response. (The legacy inline
+    # path stashed them on ``data["_gpu_crash_private"]``; the async path has
+    # the response in hand, so we read it directly and fall back to the private
+    # channel only for callers still on the old flow.)
+    private = (data or {}).get("_gpu_crash_private") or {}
+    frames = response.get("frames") or private.get("frames") or []
+    markers = response.get("markers") or private.get("markers") or []
 
     evidence_data: dict[str, Any] = {
         "fault_category": category,

@@ -105,11 +105,11 @@ def _completed_response(**overrides: Any) -> dict[str, Any]:
 
 @contextlib.contextmanager
 def _configured_teapot(url: str = "http://teapot.test") -> Iterator[None]:
-    """Context manager: sets TEAPOT_URL so the client resolves an endpoint."""
+    """Context manager: sets SENTRY_TEAPOT_URL so the client resolves an endpoint."""
 
     from django.conf import settings
 
-    with mock.patch.object(settings, "TEAPOT_URL", url, create=True):
+    with mock.patch.object(settings, "SENTRY_TEAPOT_URL", url, create=True):
         yield
 
 
@@ -257,6 +257,9 @@ def test_client_multipart_success() -> None:
     assert files["upload_file"][1] == b"dummy-dump-bytes"
     assert kwargs["headers"]["X-Teapot-Version"] == "1"
     assert kwargs["headers"]["X-Request-Id"] == "abc"
+    # event_id doubles as the idempotency key so a retried task replays
+    # teapot's cached decode instead of re-running it.
+    assert kwargs["headers"]["Idempotency-Key"] == "abc"
 
 
 def test_client_multipart_carries_shader_debug_attachments() -> None:
@@ -348,7 +351,9 @@ def test_client_exhausts_retries() -> None:
         with pytest.raises(TeapotUnavailable):
             TeapotClient(project, "abc").symbolicate(dump)
 
-    assert mock_post.call_count == 3
+    # Default teapot.max-attempts is 2 (kept low so a slow teapot can't pile up
+    # work on the GPU task worker).
+    assert mock_post.call_count == 2
 
 
 def test_client_400_is_not_retried() -> None:
@@ -385,7 +390,7 @@ def test_client_missing_url_raises() -> None:
     from django.conf import settings
 
     with (
-        mock.patch.object(settings, "TEAPOT_URL", None, create=True),
+        mock.patch.object(settings, "SENTRY_TEAPOT_URL", None, create=True),
         mock.patch(
             "sentry.lang.native.teapot.options.get",
             lambda key: {} if key == "teapot.options" else None,
@@ -401,7 +406,7 @@ def test_client_falls_back_to_options() -> None:
     project = _FakeProject()
     dump = _FakeAttachment(b"dump")
     with (
-        mock.patch.object(settings, "TEAPOT_URL", None, create=True),
+        mock.patch.object(settings, "SENTRY_TEAPOT_URL", None, create=True),
         mock.patch(
             "sentry.lang.native.teapot.options.get",
             lambda key: (
@@ -526,7 +531,7 @@ def test_submit_to_teapot_returns_none_when_unavailable() -> None:
     from django.conf import settings
 
     with (
-        mock.patch.object(settings, "TEAPOT_URL", None, create=True),
+        mock.patch.object(settings, "SENTRY_TEAPOT_URL", None, create=True),
         mock.patch(
             "sentry.lang.native.teapot.options.get",
             lambda key: None,
