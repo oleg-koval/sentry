@@ -33,17 +33,14 @@ export function getOrderedContextItems(event: Event): ContextItem[] {
   const {data: customUserData, ...userContext} = user ?? {};
 
   // hide `flags` in the contexts section since we display this
-  // info in the feature flag section below.
-  // hide `gpu_crash_raw` — the nested debug blob lives alongside the
-  // flattened `gpu_crash` context and would just duplicate info in the UI.
+  // info in the feature flag section below
   const {
     feedback,
     response,
     browser,
     runtime,
     os,
-    flags: _flags,
-    gpu_crash_raw: _gpuCrashRaw,
+    flags: _,
     ...otherContexts
   } = contexts ?? {};
   const orderedContext: Array<[ContextItem['alias'], ContextValue]> = [
