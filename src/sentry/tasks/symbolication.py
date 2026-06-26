@@ -217,12 +217,6 @@ def _do_symbolicate_event(
             data.setdefault("_metrics", {})["flag.processing.fatal"] = True
             has_changed = True
 
-    # GPU crash dump enrichment (teapot) is intentionally NOT done here. It runs
-    # in an isolated post-save task (`sentry.tasks.gpu_crash`), scheduled from
-    # `post_process_group`, so a slow/unavailable teapot can never add latency
-    # to — or otherwise regress — native CPU symbolication. See
-    # `process_gpu_crash_dump_async` in `sentry/tasks/post_process.py`.
-
     # We cannot persist canonical types in the cache, so we need to
     # downgrade this.
     if not isinstance(data, dict):
