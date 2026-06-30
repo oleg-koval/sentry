@@ -1,3 +1,5 @@
+from typing import Literal
+
 from sentry.eventtypes.base import DefaultEvent
 from sentry.eventtypes.error import ErrorEvent
 from sentry.eventtypes.feedback import FeedbackEvent
@@ -22,3 +24,16 @@ default_manager.register(FeedbackEvent)
 
 get = default_manager.get
 register = default_manager.register
+
+EventTypeStr = Literal[
+    "default",
+    "error",
+    "csp",
+    "nel",
+    "hpkp",
+    "expectct",
+    "expectstaple",
+    "transaction",
+    "generic",
+    "feedback",
+]
