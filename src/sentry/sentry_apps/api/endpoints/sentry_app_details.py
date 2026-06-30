@@ -42,7 +42,7 @@ from sentry.sentry_apps.api.serializers.sentry_app import (
 from sentry.sentry_apps.api.serializers.sentry_app import SentryAppSerializerResponse
 from sentry.sentry_apps.installations import SentryAppInstallationNotifier
 from sentry.sentry_apps.logic import SentryAppUpdater
-from sentry.sentry_apps.models.sentry_app import SentryApp
+from sentry.sentry_apps.models.sentry_app import VALID_EVENTS, SentryApp
 from sentry.sentry_apps.models.sentry_app_installation import SentryAppInstallation
 from sentry.users.models.user import User
 from sentry.users.services.user.model import RpcUser
@@ -150,6 +150,24 @@ class SentryAppDetailsEndpoint(SentryAppBaseEndpoint):
                 {
                     "non_field_errors": [
                         "Your organization does not have access to the 'error' resource subscription."
+                    ]
+                },
+                status=403,
+            )
+
+        if (
+            owner_context
+            and self._has_granular_events(request)
+            and not features.has(
+                "organizations:sentry-apps-granular-events",
+                owner_context.organization,
+                actor=request.user,
+            )
+        ):
+            return Response(
+                {
+                    "non_field_errors": [
+                        "Your organization does not have access to per-event webhook subscriptions."
                     ]
                 },
                 status=403,
@@ -289,3 +307,7 @@ class SentryAppDetailsEndpoint(SentryAppBaseEndpoint):
             return False
 
         return "error" in request.data["events"]
+
+    def _has_granular_events(self, request: Request) -> bool:
+        events = request.data.get("events") or []
+        return bool(set(events) & set(VALID_EVENTS))
