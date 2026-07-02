@@ -1,7 +1,13 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from sentry.utils.services import Service
+
+
+class ReprocessingInfo(TypedDict):
+    dateCreated: str
+    syncCount: int
+    totalEvents: int
 
 
 class ReprocessingStore(Service):
@@ -73,5 +79,5 @@ class ReprocessingStore(Service):
     def get_pending(self, group_id: int) -> Any:
         raise NotImplementedError()
 
-    def get_progress(self, group_id: int) -> dict[str, Any] | None:
+    def get_progress(self, group_id: int) -> ReprocessingInfo | None:
         raise NotImplementedError()

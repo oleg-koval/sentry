@@ -9,7 +9,7 @@ from django.conf import settings
 from sentry.utils.dates import to_datetime
 from sentry.utils.redis import redis_clusters
 
-from .base import ReprocessingStore
+from .base import ReprocessingInfo, ReprocessingStore
 
 
 def _get_sync_counter_key(group_id: int) -> str:
@@ -171,7 +171,7 @@ class RedisReprocessingStore(ReprocessingStore):
         ttl = self.redis.ttl(pending_key)
         return pending, ttl
 
-    def get_progress(self, group_id: int) -> dict[str, Any] | None:
+    def get_progress(self, group_id: int) -> ReprocessingInfo | None:
         info = self.redis.get(_get_info_reprocessed_key(group_id))
         if info is None:
             return None
