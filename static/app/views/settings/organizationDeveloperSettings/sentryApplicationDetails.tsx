@@ -1,11 +1,22 @@
 import {Fragment, useState, type MouseEvent} from 'react';
 import styled from '@emotion/styled';
-import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
+import {
+  mutationOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {z} from 'zod';
 
 import {Alert} from '@sentry/scraps/alert';
 import {Button} from '@sentry/scraps/button';
-import {defaultFormOptions, setFieldErrors, useScrapsForm} from '@sentry/scraps/form';
+import {
+  AutoSaveForm,
+  defaultFormOptions,
+  FieldGroup,
+  setFieldErrors,
+  useScrapsForm,
+} from '@sentry/scraps/form';
 import {Flex} from '@sentry/scraps/layout';
 import {ExternalLink} from '@sentry/scraps/link';
 import {useModal} from '@sentry/scraps/modal';
@@ -61,25 +72,10 @@ import {displayNewToken} from 'sentry/views/settings/components/newTokenHandler'
 import {BreadcrumbTitle} from 'sentry/views/settings/components/settingsBreadcrumb/breadcrumbTitle';
 import {EVENT_CHOICES} from 'sentry/views/settings/organizationDeveloperSettings/constants';
 import {PermissionsObserver} from 'sentry/views/settings/organizationDeveloperSettings/permissionsObserver';
-
-const AVATAR_STYLES = {
-  color: {
-    label: t('Default logo'),
-    description: t('The default icon for integrations'),
-    help: t('Image must be between 256px by 256px and 1024px by 1024px.'),
-  },
-  simple: {
-    label: t('Default small icon'),
-    description: tct('This is a silhouette icon used only for [uiDocs:UI Components]', {
-      uiDocs: (
-        <ExternalLink href="https://docs.sentry.io/product/integrations/integration-platform/ui-components/" />
-      ),
-    }),
-    help: t(
-      'Image must be between 256px by 256px and 1024px by 1024px, and may only use black and transparent pixels.'
-    ),
-  },
-};
+import {
+  SENTRY_APP_AVATAR_STYLES,
+  SentryAppAvatarField,
+} from 'sentry/views/settings/organizationDeveloperSettings/sentryAppAvatarField';
 
 const sentryAppFormSchema = z
   .object({
@@ -190,12 +186,12 @@ type SaveSentryAppPayload = {
   events: string[];
   isAlertable: boolean;
   isInternal: boolean;
-  name: string;
   organization: string;
   schema: Record<string, unknown>;
   scopes: string[];
   verifyInstall: boolean;
   author?: string | null;
+  name?: string;
   overview?: string;
   redirectUrl?: string;
   webhookHeaders?: string[];
@@ -217,6 +213,120 @@ const makeSentryAppApiTokensQueryKey = (appSlug: string): ApiQueryKey => {
 function getSchemaFieldValue(schema: SentryApp['schema'] | null | undefined) {
   const formattedSchema = JSON.stringify(schema ?? {}, null, 2);
   return formattedSchema === '{}' ? '' : formattedSchema;
+}
+
+const sentryAppIdentitySchema = z.object({
+  name: z.string().min(1, t('Name is required')),
+  author: z.string().min(1, t('Author is required')),
+});
+
+function SentryAppIdentityFields({
+  app,
+  isInternal,
+}: {
+  app: SentryApp;
+  isInternal: boolean;
+}) {
+  const organization = useOrganization();
+  const queryClient = useQueryClient();
+
+  // Merge only the fields this section owns: the avatar endpoint and a
+  // partial details PUT serialize the app without the richer context of the
+  // details GET, so spreading the whole response could clobber other fields.
+  const applyIdentity = (updated: SentryApp) => {
+    const patch = {
+      name: updated.name,
+      author: updated.author,
+      avatars: updated.avatars,
+    };
+    queryClient.setQueryData(
+      sentryAppApiOptions({appSlug: app.slug}).queryKey,
+      old => old && {...old, json: {...old.json, ...patch}}
+    );
+    queryClient.setQueryData(
+      sentryAppsApiOptions({orgSlug: organization.slug}).queryKey,
+      old =>
+        old && {
+          ...old,
+          json: old.json.map(item =>
+            item.slug === app.slug ? {...item, ...patch} : item
+          ),
+        }
+    );
+  };
+
+  const identityMutation = mutationOptions({
+    mutationFn: (data: Partial<z.infer<typeof sentryAppIdentitySchema>>) =>
+      fetchMutation<SentryApp>({
+        url: `/sentry-apps/${app.slug}/`,
+        method: 'PUT',
+        data,
+      }),
+    onSuccess: applyIdentity,
+  });
+
+  return (
+    <FieldGroup title={t('Identity')}>
+      <AutoSaveForm
+        name="name"
+        schema={sentryAppIdentitySchema}
+        initialValue={app.name}
+        mutationOptions={identityMutation}
+      >
+        {field => (
+          <field.Layout.Row
+            label={t('Name')}
+            hintText={t('Human readable name of your Integration.')}
+            required
+          >
+            <field.Input
+              value={field.state.value}
+              onChange={field.handleChange}
+              placeholder={t('e.g. My Integration')}
+            />
+          </field.Layout.Row>
+        )}
+      </AutoSaveForm>
+
+      {!isInternal && (
+        <AutoSaveForm
+          name="author"
+          schema={sentryAppIdentitySchema}
+          initialValue={app.author ?? ''}
+          mutationOptions={identityMutation}
+        >
+          {field => (
+            <field.Layout.Row
+              label={t('Author')}
+              hintText={t(
+                'The company or person who built and maintains this Integration.'
+              )}
+              required
+            >
+              <field.Input
+                value={field.state.value}
+                onChange={field.handleChange}
+                placeholder={t('e.g. Acme Software')}
+              />
+            </field.Layout.Row>
+          )}
+        </AutoSaveForm>
+      )}
+
+      <SentryAppAvatarField
+        app={app}
+        photoType="logo"
+        isInternal={isInternal}
+        onSave={applyIdentity}
+      />
+      <SentryAppAvatarField
+        app={app}
+        photoType="icon"
+        isInternal={isInternal}
+        onSave={applyIdentity}
+      />
+    </FieldGroup>
+  );
 }
 
 export default function SentryApplicationDetails() {
@@ -296,6 +406,9 @@ function SentryApplicationForm({
   const queryClient = useQueryClient();
 
   const sentryAppQueryOptions = sentryAppApiOptions({appSlug: appSlug ?? null});
+
+  const hasNewBranding =
+    !!app && organization.features.includes('sentry-app-branding-v2');
 
   const [newTokens, setNewTokens] = useState<NewInternalAppApiToken[]>([]);
   const [scopeErrors, setScopeErrors] = useState<ScopeErrors>({permissions: {}});
@@ -486,8 +599,7 @@ function SentryApplicationForm({
       return null;
     }
 
-    const avatarStyle = isColor ? 'color' : 'simple';
-    const styleProps = AVATAR_STYLES[avatarStyle];
+    const styleProps = SENTRY_APP_AVATAR_STYLES[isColor ? 'logo' : 'icon'];
 
     return (
       <AvatarChooser
@@ -496,7 +608,7 @@ function SentryApplicationForm({
         type={isColor ? 'sentryAppColor' : 'sentryAppSimple'}
         model={app}
         onSave={addAvatar}
-        title={isColor ? t('Logo') : t('Small Icon')}
+        title={styleProps.title}
         help={styleProps.help.concat(isInternal ? '' : t(' Required for publishing.'))}
         defaultChoice={{
           label: styleProps.label,
@@ -544,7 +656,6 @@ function SentryApplicationForm({
     onSubmit: ({value, formApi}) => {
       setScopeErrors({permissions: {}});
       const payload: SaveSentryAppPayload = {
-        name: value.name,
         organization: value.organization,
         // Clearable fields are submitted as '' (not null) because the
         // backend updater treats null as "field not provided" and skips
@@ -560,10 +671,16 @@ function SentryApplicationForm({
         allowedOrigins: extractMultilineFields(value.allowedOrigins),
         webhookHeaders: extractMultilineFields(value.webhookHeaders),
         schema: value.schema.trim() === '' ? {} : JSON.parse(value.schema),
+      };
+
+      // With the new branding UI, name and author save individually from
+      // the Identity section; this form no longer owns them.
+      if (!hasNewBranding) {
+        payload.name = value.name;
         // The author parser doesn't allow_blank, so send null for empty
         // (covers internal apps with no author).
-        author: value.author || null,
-      };
+        payload.author = value.author || null;
+      }
 
       return saveSentryAppMutation.mutateAsync(payload).catch(error => {
         if (!(error instanceof RequestError)) {
@@ -620,323 +737,344 @@ function SentryApplicationForm({
   });
 
   return (
-    <form.AppForm form={form}>
-      <form.FieldGroup
-        title={
-          isInternal ? t('Internal Integration Details') : t('Public Integration Details')
-        }
-      >
-        <form.AppField name="name">
-          {field => (
-            <field.Layout.Row
-              label={t('Name')}
-              hintText={t('Human readable name of your Integration.')}
-              required
-            >
-              <field.Input
-                value={field.state.value}
-                onChange={field.handleChange}
-                placeholder={t('e.g. My Integration')}
-              />
-            </field.Layout.Row>
-          )}
-        </form.AppField>
+    <Fragment>
+      {hasNewBranding && app && (
+        <SentryAppIdentityFields app={app} isInternal={isInternal} />
+      )}
 
-        {!isInternal && (
-          <form.AppField name="author">
+      <form.AppForm form={form}>
+        <form.FieldGroup
+          title={
+            isInternal
+              ? t('Internal Integration Details')
+              : t('Public Integration Details')
+          }
+        >
+          {!hasNewBranding && (
+            <form.AppField name="name">
+              {field => (
+                <field.Layout.Row
+                  label={t('Name')}
+                  hintText={t('Human readable name of your Integration.')}
+                  required
+                >
+                  <field.Input
+                    value={field.state.value}
+                    onChange={field.handleChange}
+                    placeholder={t('e.g. My Integration')}
+                  />
+                </field.Layout.Row>
+              )}
+            </form.AppField>
+          )}
+
+          {!isInternal && !hasNewBranding && (
+            <form.AppField name="author">
+              {field => (
+                <field.Layout.Row
+                  label={t('Author')}
+                  hintText={t(
+                    'The company or person who built and maintains this Integration.'
+                  )}
+                  required
+                >
+                  <field.Input
+                    value={field.state.value}
+                    onChange={field.handleChange}
+                    placeholder={t('e.g. Acme Software')}
+                  />
+                </field.Layout.Row>
+              )}
+            </form.AppField>
+          )}
+
+          <form.AppField
+            name="webhookUrl"
+            listeners={{
+              onChange: ({value, fieldApi}) => {
+                const isAlertable = fieldApi.form.getFieldValue('isAlertable');
+                if (isInternal && !value && isAlertable) {
+                  fieldApi.form.setFieldValue('isAlertable', false);
+                }
+              },
+            }}
+          >
             {field => (
               <field.Layout.Row
-                label={t('Author')}
-                hintText={t(
-                  'The company or person who built and maintains this Integration.'
+                label={t('Webhook URL')}
+                hintText={tct(
+                  'All webhook requests for your integration will be sent to this URL. Visit the [webhookDocs:documentation] to see the different types and payloads.',
+                  {
+                    webhookDocs: (
+                      <ExternalLink href="https://docs.sentry.io/product/integrations/integration-platform/webhooks/" />
+                    ),
+                  }
                 )}
-                required
+                required={!isInternal}
               >
                 <field.Input
                   value={field.state.value}
                   onChange={field.handleChange}
-                  placeholder={t('e.g. Acme Software')}
+                  placeholder={t('e.g. https://example.com/sentry/webhook/')}
                 />
               </field.Layout.Row>
             )}
           </form.AppField>
-        )}
 
-        <form.AppField
-          name="webhookUrl"
-          listeners={{
-            onChange: ({value, fieldApi}) => {
-              const isAlertable = fieldApi.form.getFieldValue('isAlertable');
-              if (isInternal && !value && isAlertable) {
-                fieldApi.form.setFieldValue('isAlertable', false);
-              }
-            },
-          }}
-        >
-          {field => (
-            <field.Layout.Row
-              label={t('Webhook URL')}
-              hintText={tct(
-                'All webhook requests for your integration will be sent to this URL. Visit the [webhookDocs:documentation] to see the different types and payloads.',
-                {
-                  webhookDocs: (
-                    <ExternalLink href="https://docs.sentry.io/product/integrations/integration-platform/webhooks/" />
-                  ),
-                }
+          {organization.features.includes('sentry-apps-custom-webhook-headers') && (
+            <form.AppField name="webhookHeaders">
+              {field => (
+                <field.Layout.Row
+                  label={t('Webhook Headers')}
+                  hintText={t(
+                    'Custom headers to include with every webhook request. Only certain headers are allowed, such as Authorization or X-* custom headers. Enter one header per line in the format: Header-Name: value. Saved header values are masked.'
+                  )}
+                >
+                  <field.TextArea
+                    autosize
+                    value={field.state.value}
+                    onChange={field.handleChange}
+                    placeholder={'Authorization: Bearer <token>\nX-Custom-Header: value'}
+                  />
+                </field.Layout.Row>
               )}
-              required={!isInternal}
-            >
-              <field.Input
-                value={field.state.value}
-                onChange={field.handleChange}
-                placeholder={t('e.g. https://example.com/sentry/webhook/')}
-              />
-            </field.Layout.Row>
+            </form.AppField>
           )}
-        </form.AppField>
 
-        {organization.features.includes('sentry-apps-custom-webhook-headers') && (
-          <form.AppField name="webhookHeaders">
+          {!isInternal && (
+            <form.AppField name="redirectUrl">
+              {field => (
+                <field.Layout.Row
+                  label={t('Redirect URL')}
+                  hintText={t(
+                    'The URL Sentry will redirect users to after installation.'
+                  )}
+                >
+                  <field.Input
+                    value={field.state.value}
+                    onChange={field.handleChange}
+                    placeholder={t('e.g. https://example.com/sentry/setup/')}
+                  />
+                </field.Layout.Row>
+              )}
+            </form.AppField>
+          )}
+
+          {!isInternal && (
+            <form.AppField name="verifyInstall">
+              {field => (
+                <field.Layout.Row
+                  label={t('Verify Installation')}
+                  hintText={t(
+                    'If enabled, installations will need to be verified before becoming installed.'
+                  )}
+                >
+                  <field.Switch
+                    checked={field.state.value}
+                    onChange={field.handleChange}
+                  />
+                </field.Layout.Row>
+              )}
+            </form.AppField>
+          )}
+
+          <form.AppField name="isAlertable">
             {field => (
               <field.Layout.Row
-                label={t('Webhook Headers')}
-                hintText={t(
-                  'Custom headers to include with every webhook request. Only certain headers are allowed, such as Authorization or X-* custom headers. Enter one header per line in the format: Header-Name: value. Saved header values are masked.'
+                label={t('Alert Action')}
+                hintText={tct(
+                  'If enabled, this integration will be available as an action in alerts in Sentry. The notification destination is the Webhook URL specified above. More on actions [learnMore:here].',
+                  {
+                    learnMore: (
+                      <ExternalLink href="https://docs.sentry.io/product/alerts-notifications/notifications/" />
+                    ),
+                  }
+                )}
+              >
+                <form.Subscribe
+                  selector={state => isInternal && !state.values.webhookUrl}
+                >
+                  {webhookDisabled => (
+                    <field.Switch
+                      checked={field.state.value}
+                      onChange={field.handleChange}
+                      disabled={
+                        webhookDisabled
+                          ? t('Cannot enable alert action without a webhook url')
+                          : false
+                      }
+                    />
+                  )}
+                </form.Subscribe>
+              </field.Layout.Row>
+            )}
+          </form.AppField>
+
+          <form.AppField name="schema">
+            {field => (
+              <field.Layout.Row
+                label={t('Schema')}
+                hintText={tct(
+                  'Schema for your UI components. Click [schemaDocs:here] for documentation.',
+                  {
+                    schemaDocs: (
+                      <ExternalLink href="https://docs.sentry.io/product/integrations/integration-platform/ui-components/" />
+                    ),
+                  }
                 )}
               >
                 <field.TextArea
                   autosize
                   value={field.state.value}
                   onChange={field.handleChange}
-                  placeholder={'Authorization: Bearer <token>\nX-Custom-Header: value'}
                 />
               </field.Layout.Row>
             )}
           </form.AppField>
-        )}
 
-        {!isInternal && (
-          <form.AppField name="redirectUrl">
+          <form.AppField name="overview">
             {field => (
               <field.Layout.Row
-                label={t('Redirect URL')}
-                hintText={t('The URL Sentry will redirect users to after installation.')}
+                label={t('Overview')}
+                hintText={t('Description of your Integration and its functionality.')}
               >
-                <field.Input
+                <field.TextArea
+                  autosize
                   value={field.state.value}
                   onChange={field.handleChange}
-                  placeholder={t('e.g. https://example.com/sentry/setup/')}
                 />
               </field.Layout.Row>
             )}
           </form.AppField>
-        )}
 
-        {!isInternal && (
-          <form.AppField name="verifyInstall">
+          <form.AppField name="allowedOrigins">
             {field => (
               <field.Layout.Row
-                label={t('Verify Installation')}
-                hintText={t(
-                  'If enabled, installations will need to be verified before becoming installed.'
-                )}
+                label={t('Authorized JavaScript Origins')}
+                hintText={t('Separate multiple entries with a newline.')}
               >
-                <field.Switch checked={field.state.value} onChange={field.handleChange} />
+                <field.TextArea
+                  autosize
+                  value={field.state.value}
+                  onChange={field.handleChange}
+                  placeholder={t('e.g. example.com')}
+                />
               </field.Layout.Row>
             )}
           </form.AppField>
+        </form.FieldGroup>
+
+        {!hasNewBranding && (
+          <Fragment>
+            {getAvatarChooser(true)}
+            {getAvatarChooser(false)}
+          </Fragment>
         )}
 
-        <form.AppField name="isAlertable">
-          {field => (
-            <field.Layout.Row
-              label={t('Alert Rule Action')}
-              hintText={tct(
-                'If enabled, this integration will be available in Issue Alert rules and Metric Alert rules in Sentry. The notification destination is the Webhook URL specified above. More on actions [learnMore:here].',
-                {
-                  learnMore: (
-                    <ExternalLink href="https://docs.sentry.io/product/alerts-notifications/notifications/" />
-                  ),
-                }
-              )}
-            >
-              <form.Subscribe selector={state => isInternal && !state.values.webhookUrl}>
-                {webhookDisabled => (
-                  <field.Switch
-                    checked={field.state.value}
-                    onChange={field.handleChange}
-                    disabled={
-                      webhookDisabled
-                        ? t('Cannot enable alert rule action without a webhook url')
-                        : false
-                    }
-                  />
-                )}
-              </form.Subscribe>
-            </field.Layout.Row>
+        <form.Subscribe selector={state => isInternal && !state.values.webhookUrl}>
+          {webhookDisabled => (
+            <PermissionsObserver
+              webhookDisabled={webhookDisabled}
+              appPublished={app ? app.status === 'published' : false}
+              scopes={app ? [...app.scopes] : []}
+              events={app ? normalize(app.events) : []}
+              newApp={!app}
+              permissionErrors={scopeErrors.permissions}
+              continuousIntegrationError={scopeErrors.continuousIntegration}
+              onScopesChange={scopes => form.setFieldValue('scopes', scopes)}
+              onEventsChange={events => form.setFieldValue('events', events)}
+            />
           )}
-        </form.AppField>
+        </form.Subscribe>
 
-        <form.AppField name="schema">
-          {field => (
-            <field.Layout.Row
-              label={t('Schema')}
-              hintText={tct(
-                'Schema for your UI components. Click [schemaDocs:here] for documentation.',
-                {
-                  schemaDocs: (
-                    <ExternalLink href="https://docs.sentry.io/product/integrations/integration-platform/ui-components/" />
-                  ),
-                }
-              )}
-            >
-              <field.TextArea
-                autosize
-                value={field.state.value}
-                onChange={field.handleChange}
-              />
-            </field.Layout.Row>
-          )}
-        </form.AppField>
-
-        <form.AppField name="overview">
-          {field => (
-            <field.Layout.Row
-              label={t('Overview')}
-              hintText={t('Description of your Integration and its functionality.')}
-            >
-              <field.TextArea
-                autosize
-                value={field.state.value}
-                onChange={field.handleChange}
-              />
-            </field.Layout.Row>
-          )}
-        </form.AppField>
-
-        <form.AppField name="allowedOrigins">
-          {field => (
-            <field.Layout.Row
-              label={t('Authorized JavaScript Origins')}
-              hintText={t('Separate multiple entries with a newline.')}
-            >
-              <field.TextArea
-                autosize
-                value={field.state.value}
-                onChange={field.handleChange}
-                placeholder={t('e.g. example.com')}
-              />
-            </field.Layout.Row>
-          )}
-        </form.AppField>
-      </form.FieldGroup>
-
-      {getAvatarChooser(true)}
-      {getAvatarChooser(false)}
-
-      <form.Subscribe selector={state => isInternal && !state.values.webhookUrl}>
-        {webhookDisabled => (
-          <PermissionsObserver
-            webhookDisabled={webhookDisabled}
-            appPublished={app ? app.status === 'published' : false}
-            scopes={app ? [...app.scopes] : []}
-            events={app ? normalize(app.events) : []}
-            newApp={!app}
-            permissionErrors={scopeErrors.permissions}
-            continuousIntegrationError={scopeErrors.continuousIntegration}
-            onScopesChange={scopes => form.setFieldValue('scopes', scopes)}
-            onEventsChange={events => form.setFieldValue('events', events)}
-          />
-        )}
-      </form.Subscribe>
-
-      {app?.status === 'internal' && (
-        <PanelTable
-          headers={[
-            t('Token'),
-            t('Created On'),
-            t('Scopes'),
-            <AddTokenHeader key="token-add">
-              <Tooltip
-                disabled={hasTokenAccess()}
-                title={t(
-                  'You must be a Manager or Owner to create authentication tokens.'
-                )}
-              >
-                <Button
-                  size="xs"
-                  icon={<IconAdd />}
-                  onClick={onAddToken}
-                  disabled={!hasTokenAccess()}
-                  data-test-id="token-add"
+        {app?.status === 'internal' && (
+          <PanelTable
+            headers={[
+              t('Token'),
+              t('Created On'),
+              t('Scopes'),
+              <AddTokenHeader key="token-add">
+                <Tooltip
+                  disabled={hasTokenAccess()}
+                  title={t(
+                    'You must be a Manager or Owner to create authentication tokens.'
+                  )}
                 >
-                  {t('New Token')}
-                </Button>
-              </Tooltip>
-            </AddTokenHeader>,
-          ]}
-          isEmpty={tokens.length === 0}
-          emptyMessage={t("You haven't created any authentication tokens yet.")}
-        >
-          {renderTokens()}
-        </PanelTable>
-      )}
-
-      {app && (
-        <Panel>
-          <PanelHeader>{t('Credentials')}</PanelHeader>
-          <PanelBody>
-            {app.status !== 'internal' && (
-              <FormField name="clientId" label="Client ID">
-                {({id}: {id: string}) => (
-                  <TextCopyInput id={id}>{app.clientId ?? ''}</TextCopyInput>
-                )}
-              </FormField>
-            )}
-            <FormField
-              name="clientSecret"
-              label="Client Secret"
-              help={t(`Your secret is only available briefly after integration creation. Make
-                sure to save this value!`)}
-            >
-              {({id}: {id: string}) =>
-                app.clientSecret ? (
-                  <Tooltip
-                    disabled={showAuthInfo()}
-                    position="right"
-                    containerDisplayMode="inline"
-                    title={t(
-                      'Only Manager or Owner can view these credentials, or the permissions for this integration exceed those of your role.'
-                    )}
+                  <Button
+                    size="xs"
+                    icon={<IconAdd />}
+                    onClick={onAddToken}
+                    disabled={!hasTokenAccess()}
+                    data-test-id="token-add"
                   >
-                    <TextCopyInput id={id}>{app.clientSecret}</TextCopyInput>
-                  </Tooltip>
-                ) : (
-                  <ClientSecret>
-                    <HiddenSecret>{t('hidden')}</HiddenSecret>
-                    {hasTokenAccess() ? (
-                      <Confirm
-                        onConfirm={rotateClientSecret}
-                        message={t(
-                          'Are you sure you want to rotate the client secret? The current one will not be usable anymore, and this cannot be undone.'
-                        )}
-                        errorMessage={t('Error rotating secret')}
-                      >
-                        <Button variant="danger">{t('Rotate client secret')}</Button>
-                      </Confirm>
-                    ) : undefined}
-                  </ClientSecret>
-                )
-              }
-            </FormField>
-          </PanelBody>
-        </Panel>
-      )}
+                    {t('New Token')}
+                  </Button>
+                </Tooltip>
+              </AddTokenHeader>,
+            ]}
+            isEmpty={tokens.length === 0}
+            emptyMessage={t("You haven't created any authentication tokens yet.")}
+          >
+            {renderTokens()}
+          </PanelTable>
+        )}
 
-      <Flex justify="end" paddingTop="xl">
-        <form.SubmitButton>{t('Save Changes')}</form.SubmitButton>
-      </Flex>
-    </form.AppForm>
+        {app && (
+          <Panel>
+            <PanelHeader>{t('Credentials')}</PanelHeader>
+            <PanelBody>
+              {app.status !== 'internal' && (
+                <FormField name="clientId" label="Client ID">
+                  {({id}: {id: string}) => (
+                    <TextCopyInput id={id}>{app.clientId ?? ''}</TextCopyInput>
+                  )}
+                </FormField>
+              )}
+              <FormField
+                name="clientSecret"
+                label="Client Secret"
+                help={t(`Your secret is only available briefly after integration creation. Make
+                sure to save this value!`)}
+              >
+                {({id}: {id: string}) =>
+                  app.clientSecret ? (
+                    <Tooltip
+                      disabled={showAuthInfo()}
+                      position="right"
+                      containerDisplayMode="inline"
+                      title={t(
+                        'Only Manager or Owner can view these credentials, or the permissions for this integration exceed those of your role.'
+                      )}
+                    >
+                      <TextCopyInput id={id}>{app.clientSecret}</TextCopyInput>
+                    </Tooltip>
+                  ) : (
+                    <ClientSecret>
+                      <HiddenSecret>{t('hidden')}</HiddenSecret>
+                      {hasTokenAccess() ? (
+                        <Confirm
+                          onConfirm={rotateClientSecret}
+                          message={t(
+                            'Are you sure you want to rotate the client secret? The current one will not be usable anymore, and this cannot be undone.'
+                          )}
+                          errorMessage={t('Error rotating secret')}
+                        >
+                          <Button variant="danger">{t('Rotate client secret')}</Button>
+                        </Confirm>
+                      ) : undefined}
+                    </ClientSecret>
+                  )
+                }
+              </FormField>
+            </PanelBody>
+          </Panel>
+        )}
+
+        <Flex justify="end" paddingTop="xl">
+          <form.SubmitButton>{t('Save Changes')}</form.SubmitButton>
+        </Flex>
+      </form.AppForm>
+    </Fragment>
   );
 }
 

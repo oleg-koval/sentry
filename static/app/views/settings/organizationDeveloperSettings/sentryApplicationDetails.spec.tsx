@@ -671,4 +671,113 @@ describe('Sentry Application Details', () => {
       expect(rotateSecretApiCall).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('Editing with the new branding UI', () => {
+    const organization = OrganizationFixture({features: ['sentry-app-branding-v2']});
+    const initialRouterConfig: RouterConfig = {
+      location: {
+        pathname: '/sentry-apps/sample-app/',
+      },
+      route: '/sentry-apps/:appSlug/',
+    };
+    function renderComponent() {
+      return render(<SentryApplicationDetails />, {initialRouterConfig, organization});
+    }
+
+    beforeEach(() => {
+      sentryApp = SentryAppFixture();
+
+      editAppRequest = MockApiClient.addMockResponse({
+        url: `/sentry-apps/${sentryApp.slug}/`,
+        method: 'PUT',
+        body: sentryApp,
+      });
+
+      MockApiClient.addMockResponse({
+        url: `/sentry-apps/${sentryApp.slug}/`,
+        body: sentryApp,
+      });
+
+      MockApiClient.addMockResponse({
+        url: `/sentry-apps/${sentryApp.slug}/api-tokens/`,
+        body: [],
+      });
+    });
+
+    it('renders the identity section with branding rows', async () => {
+      renderComponent();
+      await screen.findByRole('button', {name: 'Save Changes'});
+
+      expect(screen.getByText('Identity')).toBeInTheDocument();
+      expect(screen.getByRole('textbox', {name: 'Name'})).toBeInTheDocument();
+      expect(screen.getByRole('textbox', {name: 'Author'})).toBeInTheDocument();
+      expect(screen.getByText('Logo')).toBeInTheDocument();
+      expect(screen.getByText('Small Icon')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', {name: 'Change'})).toHaveLength(2);
+    });
+
+    it('auto-saves the name on blur', async () => {
+      renderComponent();
+
+      const nameInput = await screen.findByRole('textbox', {name: 'Name'});
+      await userEvent.clear(nameInput);
+      await userEvent.type(nameInput, 'Renamed App');
+      await userEvent.tab();
+
+      await waitFor(() =>
+        expect(editAppRequest).toHaveBeenCalledWith(
+          `/sentry-apps/${sentryApp.slug}/`,
+          expect.objectContaining({
+            method: 'PUT',
+            data: {name: 'Renamed App'},
+          })
+        )
+      );
+    });
+
+    it('saves an avatar choice immediately from the change menu', async () => {
+      const avatarRequest = MockApiClient.addMockResponse({
+        url: `/sentry-apps/${sentryApp.slug}/avatar/`,
+        method: 'PUT',
+        body: sentryApp,
+      });
+
+      renderComponent();
+      await screen.findByText('Logo');
+
+      await userEvent.click(screen.getAllByRole('button', {name: 'Change'})[0]!);
+      await userEvent.click(
+        await screen.findByRole('menuitemradio', {name: /Default logo/})
+      );
+
+      await waitFor(() =>
+        expect(avatarRequest).toHaveBeenCalledWith(
+          `/sentry-apps/${sentryApp.slug}/avatar/`,
+          expect.objectContaining({
+            method: 'PUT',
+            data: expect.objectContaining({
+              avatar_type: 'default',
+              color: true,
+              photoType: 'logo',
+            }),
+          })
+        )
+      );
+    });
+
+    it('omits name and author from the Save Changes payload', async () => {
+      renderComponent();
+      await screen.findByRole('button', {name: 'Save Changes'});
+
+      await userEvent.click(screen.getByRole('button', {name: 'Save Changes'}));
+
+      await waitFor(() => expect(editAppRequest).toHaveBeenCalled());
+      expect(editAppRequest).toHaveBeenCalledWith(
+        `/sentry-apps/${sentryApp.slug}/`,
+        expect.objectContaining({
+          data: expect.not.objectContaining({name: expect.anything()}),
+        })
+      );
+    });
+  });
 });
