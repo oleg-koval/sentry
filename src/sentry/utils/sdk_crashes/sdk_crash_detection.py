@@ -66,7 +66,8 @@ class SDKCrashDetection:
         if not sdk_name or not sdk_version:
             return None
 
-        metric_tags = {"sdk_name": sdk_name, "sdk_version": sdk_version}
+        mechanism = get_path(event.data, "exception", "values", -1, "mechanism", "type")
+        metric_tags = {"sdk_name": sdk_name, "sdk_version": sdk_version, "mechanism": mechanism or "unknown"}
         sdk_detectors = list(map(lambda config: SDKCrashDetector(config=config), configs))
 
         num_supported_detectors = sum(
