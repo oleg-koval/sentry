@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import logging
 import sys
 import typing
 from collections.abc import Generator, Mapping, Sequence, Sized
 from types import FrameType
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import sentry_sdk
 from django.conf import settings
@@ -902,6 +903,78 @@ def _flatten_value_into_dict(
         flat_dict[accumulated_path] = str(value)
 
 
+class SentrySDKLogger:
+    """
+    Convenience wrapper around the `sentry_sdk.logger` family of functions (`trace`, `debug`,
+    `info`, `warning`, `error`, and `fatal`), which handles serializing `attributes` to match the
+    required format (no nested lists or dictionaries, every value a primitive).
+
+    Exported as a singleton, `sdk_logger`, with all of the logging functions on it.
+
+    Usage:
+        sdk_logger.info(
+            "dogs are great",
+            attributes={
+                "dogs": ["charlie", "maisey"],
+                "characteristics": {"very_good": True, "furry": True}
+            },
+        )
+    which will call:
+        sentry_sdk.logger.info(
+            "dogs are great",
+            attributes={
+                "dogs.0": "charlie",
+                "dogs.1": "maisey",
+                "characteristics.very_good": True,
+                "characteristics.furry": True,
+            }
+        )
+
+    Other than allowing complex values for `attributes`, otherwise matches the API of the logging
+    functions. See https://docs.sentry.io/platforms/python/logs.
+    """
+
+    def __init__(self):
+        self.trace = functools.partial(self._log_to_sentry, "trace")
+        self.debug = functools.partial(self._log_to_sentry, "debug")
+        self.info = functools.partial(self._log_to_sentry, "info")
+        self.warning = functools.partial(self._log_to_sentry, "warning")
+        self.error = functools.partial(self._log_to_sentry, "error")
+        self.fatal = functools.partial(self._log_to_sentry, "fatal")
+
+    def _log_to_sentry(
+        self,
+        level: Literal["trace", "debug", "info", "warning", "error", "fatal"],
+        message_or_template: str,
+        **kwargs: Any,
+    ) -> None:
+        if "attributes" in kwargs:
+            provided_attributes = kwargs.pop("attributes")
+            if isinstance(provided_attributes, dict):
+                kwargs["attributes"] = flatten_dict(provided_attributes)
+            else:
+                sentry_sdk.capture_message(
+                    "SDK logger called with invalid attributes",
+                    level="error",
+                    extras={"provided_attributes": provided_attributes},
+                )
+
+        if level == "trace":
+            sentry_sdk.logger.trace(message_or_template, **kwargs)
+        elif level == "debug":
+            sentry_sdk.logger.debug(message_or_template, **kwargs)
+        elif level == "info":
+            sentry_sdk.logger.info(message_or_template, **kwargs)
+        elif level == "warning":
+            sentry_sdk.logger.warning(message_or_template, **kwargs)
+        elif level == "error":
+            sentry_sdk.logger.error(message_or_template, **kwargs)
+        elif level == "fatal":
+            sentry_sdk.logger.fatal(message_or_template, **kwargs)
+
+
+sdk_logger = SentrySDKLogger()
+
 __all__ = (
     "LEGACY_RESOLVER",
     "Scope",
@@ -925,6 +998,7 @@ __all__ = (
     "merge_context_into_scope",
     "patch_transport_for_instrumentation",
     "isolation_scope",
+    "sdk_logger",
     "set_current_event_project",
     "traces_sampler",
 )
