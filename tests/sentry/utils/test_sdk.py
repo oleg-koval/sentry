@@ -19,7 +19,9 @@ from sentry.utils.sdk import (
     capture_exception_with_scope_check,
     check_current_scope_transaction,
     check_tag_for_scope_bleed,
+    flatten_dict,
     merge_context_into_scope,
+    sdk_logger,
 )
 
 
@@ -609,6 +611,112 @@ class ShouldDropS4STest(TestCase):
             error_item.type = "event"
             envelope.items = [error_item]
             assert transport._should_drop_s4s("capture_envelope", envelope) is False
+
+
+class SDKLoggerTest(TestCase):
+    def test_flatten_dict(self) -> None:
+        class Dog:
+            def __init__(self, name: str):
+                self.name = name
+
+            def __str__(self) -> str:
+                return f"<Dog('{self.name}')>"
+
+        nested_dict = {
+            "aardvark": {
+                "bobcat": "chipmunk",
+                "dingo": {
+                    "elephant": "fox",
+                    "giraffe": [
+                        "hippo",
+                        "iguana",
+                        "jackrabbit",
+                    ],
+                },
+            },
+            "kangaroo": [
+                "lemur",
+                "manatee",
+                {
+                    "narwhal": "otter",
+                    "porcupine": [
+                        "quokka",
+                        {
+                            "raccoon": "squirrel",
+                        },
+                    ],
+                },
+            ],
+            "tapir": True,
+            "uakari": {},
+            "vaquita": [],
+            "wolf": "",
+            "xerus": 11,
+            "yak": 2.1,
+            "zebra": Dog("maisey"),
+        }
+
+        assert flatten_dict(nested_dict) == {
+            "aardvark.bobcat": "chipmunk",
+            "aardvark.dingo.elephant": "fox",
+            "aardvark.dingo.giraffe.0": "hippo",
+            "aardvark.dingo.giraffe.1": "iguana",
+            "aardvark.dingo.giraffe.2": "jackrabbit",
+            "kangaroo.0": "lemur",
+            "kangaroo.1": "manatee",
+            "kangaroo.2.narwhal": "otter",
+            "kangaroo.2.porcupine.0": "quokka",
+            "kangaroo.2.porcupine.1.raccoon": "squirrel",
+            "tapir": True,
+            "uakari": "{}",
+            "vaquita": "[]",
+            "wolf": '""',
+            "xerus": 11,
+            "yak": 2.1,
+            "zebra": "<Dog('maisey')>",
+        }
+
+    @patch("sentry_sdk.logger.info")
+    def test_flattens_attributes(self, mock_sdk_logger_info: MagicMock) -> None:
+        sdk_logger.info("dogs are great", attributes={"adopt": ["don't", "shop"]})
+        mock_sdk_logger_info.assert_called_with(
+            "dogs are great", attributes={"adopt.0": "don't", "adopt.1": "shop"}
+        )
+
+    @patch("sentry_sdk.logger.info")
+    def test_passes_along_kwargs(self, mock_sdk_logger_info: MagicMock) -> None:
+        sdk_logger.info("{animal} are {adj}", animal="dogs", adj="great")
+        mock_sdk_logger_info.assert_called_with("{animal} are {adj}", animal="dogs", adj="great")
+
+    @patch("sentry_sdk.logger.trace")
+    def test_calls_sdk_logger_trace(self, mock_sdk_logger_trace: MagicMock) -> None:
+        sdk_logger.trace("dogs are great")
+        mock_sdk_logger_trace.assert_called_with("dogs are great")
+
+    @patch("sentry_sdk.logger.debug")
+    def test_calls_sdk_logger_debug(self, mock_sdk_logger_debug: MagicMock) -> None:
+        sdk_logger.debug("dogs are great")
+        mock_sdk_logger_debug.assert_called_with("dogs are great")
+
+    @patch("sentry_sdk.logger.info")
+    def test_calls_sdk_logger_info(self, mock_sdk_logger_info: MagicMock) -> None:
+        sdk_logger.info("dogs are great")
+        mock_sdk_logger_info.assert_called_with("dogs are great")
+
+    @patch("sentry_sdk.logger.warning")
+    def test_calls_sdk_logger_warning(self, mock_sdk_logger_warning: MagicMock) -> None:
+        sdk_logger.warning("dogs are great")
+        mock_sdk_logger_warning.assert_called_with("dogs are great")
+
+    @patch("sentry_sdk.logger.error")
+    def test_calls_sdk_logger_error(self, mock_sdk_logger_error: MagicMock) -> None:
+        sdk_logger.error("dogs are great")
+        mock_sdk_logger_error.assert_called_with("dogs are great")
+
+    @patch("sentry_sdk.logger.fatal")
+    def test_calls_sdk_logger_fatal(self, mock_sdk_logger_fatal: MagicMock) -> None:
+        sdk_logger.fatal("dogs are great")
+        mock_sdk_logger_fatal.assert_called_with("dogs are great")
 
 
 def test_before_send_error_level() -> None:
