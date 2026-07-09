@@ -23,7 +23,7 @@ from sentry_sdk.integrations.django.transactions import LEGACY_RESOLVER
 from sentry_sdk.tracing_utils import has_span_streaming_enabled
 from sentry_sdk.transport import make_transport
 from sentry_sdk.types import Event, Hint, Log
-from sentry_sdk.utils import logger as sdk_logger
+from sentry_sdk.utils import logger as sdk_error_logger
 
 from sentry import options
 from sentry.conf.types.sdk_config import SdkConfig
@@ -164,7 +164,7 @@ def get_project_key():
     except Exception as exc:
         # if the relation fails to query or is missing completely, lets handle
         # it gracefully
-        sdk_logger.warning(
+        sdk_error_logger.warning(
             "internal-error.unable-to-fetch-project",
             extra={
                 "project_id": settings.SENTRY_PROJECT,
@@ -173,7 +173,7 @@ def get_project_key():
             },
         )
     if key is None:
-        sdk_logger.warning(
+        sdk_error_logger.warning(
             "internal-error.no-project-available",
             extra={
                 "project_id": settings.SENTRY_PROJECT,
@@ -726,7 +726,7 @@ def bind_organization_context(organization: Organization | RpcOrganization) -> N
             try:
                 helper(scope=scope, organization=organization)
             except Exception:
-                sdk_logger.exception(
+                sdk_error_logger.exception(
                     "internal-error.organization-context",
                     extra={"organization_id": organization.id},
                 )
