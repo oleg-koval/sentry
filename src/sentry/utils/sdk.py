@@ -822,6 +822,86 @@ def merge_context_into_scope(
     existing_context.update(context_data)
 
 
+def flatten_dict(maybe_nested_dict: dict[str, Any]) -> dict[str, Any]:
+    """
+    Recursively flatten a nested dict into a single-level dict keyed by dotted paths. Primitive
+    values are used as is, and empty values are stringified (as are values whose type is
+    unrecognized).
+
+    For example, given the following input:
+        {
+            "aardvark": {
+                "bobcat": "chipmunk",
+                "dingo": {
+                    "elephant": "fox",
+                },
+            },
+            "giraffe": [
+                "hippo",
+                "iguana",
+            ],
+            "jackrabbit": True,
+            "kangaroo": {},
+            "lemur": 12,
+        }
+    this function will return:
+        {
+            "aardvark.bobcat": "chipmunk",
+            "aardvark.dingo.elephant": "fox",
+            "giraffe.0": "hippo",
+            "giraffe.1": "iguana",
+            "jackrabbit": True,
+            "kangaroo": "{}",
+            "lemur": 12,
+        }
+    """
+    flat_dict: dict[str, Any] = {}
+
+    for key, value in maybe_nested_dict.items():
+        _flatten_value_into_dict(flat_dict, value, accumulated_path=key)
+
+    return flat_dict
+
+
+def _flatten_value_into_dict(
+    flat_dict: dict[str, Any],
+    value: Any,
+    accumulated_path: str,
+) -> None:
+    """
+    Add to `flat_dict` one or more entries (as necessary) to represent `value`. Recurses into lists,
+    tuples, and dicts, accumulating path segments as it goes. Empty values are stringified, as are
+    values whose type is unrecognized.
+
+    Used as the recursive innards of the `flatten_dict` util. See docstring there for examples.
+    """
+    if isinstance(value, dict):
+        if not value:
+            flat_dict[accumulated_path] = "{}"
+        else:
+            for key, child in value.items():
+                _flatten_value_into_dict(
+                    flat_dict, value=child, accumulated_path=f"{accumulated_path}.{key}"
+                )
+    elif isinstance(value, (list, tuple)):
+        if not value:
+            flat_dict[accumulated_path] = "[]" if isinstance(value, list) else "()"
+        else:
+            for i, child in enumerate(value):
+                _flatten_value_into_dict(
+                    flat_dict, value=child, accumulated_path=f"{accumulated_path}.{i}"
+                )
+    elif isinstance(value, str):
+        if not value:
+            flat_dict[accumulated_path] = '""'
+        else:
+            flat_dict[accumulated_path] = value
+    elif isinstance(value, (int, float, bool)):
+        flat_dict[accumulated_path] = value
+    else:
+        flat_dict[accumulated_path] = str(value)
+
+
 __all__ = (
     "LEGACY_RESOLVER",
     "Scope",
